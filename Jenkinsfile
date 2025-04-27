@@ -1,14 +1,15 @@
+
 pipeline {
     agent any
 
     environment {
-        FRONTEND_IMAGE_NAME = "faisalkhan35/my-war"
+        BACKEND_IMAGE_NAME = "faisalkhan35/my-war"
         TAG = "latest"
         KUBECONFIG = "/var/lib/jenkins/.kube/config"
-        SONAR_PROJECT_KEY = "Application-1"
-        SONAR_PROJECT_NAME = "War-Backend-Application"
+        SONAR_PROJECT_KEY = "War-Application"
+        SONAR_PROJECT_NAME = "Backend-War-Application"
         SONAR_SCANNER_HOME = "/opt/sonar-scanner"
-        IMAGE_NAME_TAG = "${FRONTEND_IMAGE_NAME}:${TAG}"
+        IMAGE_NAME_TAG = "${BACKEND_IMAGE_NAME}:${TAG}"
     }
 
     stages {
@@ -33,13 +34,22 @@ pipeline {
                                 -Dsonar.projectName=${SONAR_PROJECT_NAME} \
                                 -Dsonar.sources=. \
                                 -Dsonar.java.binaries=target/classes \
-                                -Dsonar.host.url=http://13.127.232.147:9000"
+                                -Dsonar.host.url=http://13.126.239.35:9000"
                         }
                     }
                 }
             }
         }
 
+           // Quality Gate check (waits for the analysis result)
+        stage('SonarQube Quality Gate Check') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        
         stage('Build Docker Image') {
             steps {
                 dir('WAR-Project') {
