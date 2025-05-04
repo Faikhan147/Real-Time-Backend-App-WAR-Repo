@@ -6,24 +6,6 @@ image:
   repository: "faisalkhan35/my-war-app"
   tag: "latest"
 
-# Readiness Probe Configuration
-readinessProbe:
-  httpGet:
-    path: /healthz
-    port: 80
-  initialDelaySeconds: 5
-  periodSeconds: 5
-  failureThreshold: 3
-
-# Liveness Probe Configuration
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 80
-  initialDelaySeconds: 15
-  periodSeconds: 10
-  failureThreshold: 3
-
 # Resources configuration
 resources:
   requests:
