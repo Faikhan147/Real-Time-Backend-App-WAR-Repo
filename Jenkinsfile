@@ -17,7 +17,7 @@ pipeline {
         SONAR_SCANNER_HOME = "/opt/sonar-scanner"
         IMAGE_NAME_TAG = "${BACKEND_IMAGE_NAME}:${TAG}"
         HELM_CHART_DIR = "helm/war-app-chart"
-        WAR-APP_URL = credentials('war-app-url')
+        WAR_APP_URL = credentials('war-app-url')
     }
 
     stages {
@@ -45,16 +45,21 @@ pipeline {
             }
         }
 
- stage('Artifact Archiving') {
-            when {
-                expression { return fileExists('WAR-Project/target/*.war') }
-            }
-            steps {
-                dir('WAR-Project') {
-                    archiveArtifacts artifacts: 'target/*.war', fingerprint: true
-                }
+stage('Artifact Archiving') {
+    steps {
+        script {
+            // Checking if any .war file exists in the target folder
+            def warFiles = sh(script: 'ls -l WAR-Project/target/*.war', returnStdout: true).trim()
+
+            // If .war files are found, archive them
+            if (warFiles) {
+                archiveArtifacts artifacts: 'WAR-Project/target/*.war', fingerprint: true
+            } else {
+                echo 'No WAR files found, skipping artifact archiving.'
             }
         }
+    }
+}
 
         stage('SonarQube Code Analysis') {
             steps {
@@ -67,7 +72,7 @@ pipeline {
                                 -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
                                 -Dsonar.projectName=${SONAR_PROJECT_NAME} \
                                 -Dsonar.sources=. \
-                                -Dsonar.host.url=http://13.233.223.130:9000
+                                -Dsonar.host.url=http://13.232.172.2:9000
                             """
                         }
                     }
@@ -200,24 +205,28 @@ pipeline {
             }
         }
 
-        stage('Rollback (if needed)') {
-            when {
-                expression { return params.ENVIRONMENT == 'qa' || params.ENVIRONMENT == 'staging' }
-            }
-            steps {
-                script {
-                    echo "Checking if rollback is needed..."
-                    def releaseHistory = sh(script: "helm history war-app-${params.ENVIRONMENT} --namespace ${params.ENVIRONMENT} --output json", returnStdout: true).trim()
-                    if (releaseHistory.contains('"revision":')) {
-                        def lastRevision = sh(script: "helm history war-app-${params.ENVIRONMENT} --namespace ${params.ENVIRONMENT} | tail -2 | head -1 | awk '{print \$1}'", returnStdout: true).trim()
-                        echo "Rolling back to revision ${lastRevision}"
-                        sh "helm rollback war-app-${params.ENVIRONMENT} ${lastRevision} --namespace ${params.ENVIRONMENT}"
-                    } else {
-                        echo "No previous revision found. Skipping rollback."
-                    }
-                }
+stage('Rollback (if needed)') {
+    when {
+        expression { return params.ENVIRONMENT == 'qa' || params.ENVIRONMENT == 'staging' }
+    }
+    steps {
+        script {
+            echo "Checking if rollback is needed..."
+
+            def revisionCount = sh(script: "helm history war-app-${params.ENVIRONMENT} --namespace ${params.ENVIRONMENT} | wc -l", returnStdout: true).trim().toInteger()
+
+            // header + at least 2 revisions = 3 lines
+            if (revisionCount >= 3) {
+                def lastRevision = sh(script: "helm history war-app-${params.ENVIRONMENT} --namespace ${params.ENVIRONMENT} | tail -2 | head -1 | awk '{print \$1}'", returnStdout: true).trim()
+                echo "Rolling back to revision ${lastRevision}"
+                sh "helm rollback war-app-${params.ENVIRONMENT} ${lastRevision} --namespace ${params.ENVIRONMENT}"
+            } else {
+                echo "Not enough revisions to perform rollback. Skipping."
             }
         }
+    }
+}
+
 
 // Monitoring Deployment for QA/Staging
 stage('Monitor Deployment (Pods + War-App Health Check)') {
@@ -242,9 +251,9 @@ stage('Monitor Deployment (Pods + War-App Health Check)') {
                 }
             }
             retry(3) {
-                withEnv(["WAR-APP_URL=${WAR-APP_URL}"]) {
+                withEnv(["WAR_APP_URL=${WAR_APP_URL}"]) {
                     sh '''#!/bin/bash
-                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR-APP_URL")
+                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
                         if [ "$STATUS_CODE" -ne 200 ]; then
                             echo "❌ War-App health check failed."
                             exit 1
@@ -314,9 +323,9 @@ stage('Monitor Deployment for Production (Pods + War-App Health Check)') {
                 }
             }
             retry(3) {
-                withEnv(["WAR-APP_URL=${WAR-APP_URL}"]) {
+                withEnv(["WAR_APP_URL=${WAR_APP_URL}"]) {
                     sh '''#!/bin/bash
-                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR-APP_URL")
+                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
                         if [ "$STATUS_CODE" -ne 200 ]; then
                             echo "❌ War-App health check failed."
                             exit 1
