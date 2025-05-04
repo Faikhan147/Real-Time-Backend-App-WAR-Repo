@@ -1,0 +1,18 @@
+# service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-war-app-service
+  labels:
+    app: war-app
+    release: {{ .Release.Name }}
+spec:
+  type: LoadBalancer   # ⭐ Yeh line add ki gayi hai
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: war-app
+    release: {{ .Release.Name }}
+
