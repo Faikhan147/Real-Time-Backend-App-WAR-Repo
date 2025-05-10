@@ -17,7 +17,7 @@ pipeline {
         SONAR_SCANNER_HOME = "/opt/sonar-scanner"
         IMAGE_NAME_TAG = "${BACKEND_IMAGE_NAME}:${TAG}"
         HELM_CHART_DIR = "helm/war-app-chart"
-        WAR_APP_URL = credentials('war-app-url')
+        WAR_APP_URL = credentials('backend-war-app-url')
     }
 
     stages {
