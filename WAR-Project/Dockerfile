@@ -1,5 +1,9 @@
 FROM tomcat:10.1-jdk17-temurin
-RUN apt-get update && apt-get install -y curl && apt-get clean
+RUN apt-get update && \
+    apt-get upgrade -y --fix-missing && \
+    apt-get install -y curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 RUN rm -rf /usr/local/tomcat/webapps/*
 COPY target/WAR-Project-0.0.1-SNAPSHOT.war /usr/local/tomcat/webapps/ROOT.war
 EXPOSE 8080
