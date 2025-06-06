@@ -3,6 +3,8 @@ pipeline {
 
     parameters {
         string(name: 'BRANCH', defaultValue: 'main', description: 'Branch to build')
+        string(name: 'SONAR_PROJECT_KEY', defaultValue: 'War-App', description: 'SonarQube Project Key')
+        string(name: 'SONAR_PROJECT_NAME', defaultValue: 'Backend-War-App', description: 'SonarQube Project Name')
         string(name: 'REPO_URL', defaultValue: 'https://github.com/Faikhan147/Real-Time-Backend-App-WAR-Repo.git', description: 'Git repo URL')
         choice(name: 'ENVIRONMENT', choices: ['qa', 'staging', 'prod'], description: 'Select the environment to deploy')
     }
@@ -10,14 +12,15 @@ pipeline {
     environment {
         DOCKER_IMAGE = "faisalkhan35/my-war-app"
         SLACK_WEBHOOK_URL = credentials('slack-webhook')
-        BACKEND_IMAGE_NAME = "faisalkhan35/my-war-app"
         TAG = "${BUILD_NUMBER}"
-        SONAR_PROJECT_KEY = "War-App"
-        SONAR_PROJECT_NAME = "Backend-War-App"
+        SONAR_PROJECT_KEY = "${params.SONAR_PROJECT_KEY}"
+        SONAR_PROJECT_NAME = "${params.SONAR_PROJECT_NAME}"
         SONAR_SCANNER_HOME = "/opt/sonar-scanner"
-        IMAGE_NAME_TAG = "${BACKEND_IMAGE_NAME}:${TAG}"
+        IMAGE_NAME_TAG = "${DOCKER_IMAGE}:${TAG}"
         HELM_CHART_DIR = "helm/war-app-chart"
         WAR_APP_URL = credentials('backend-war-app-url')
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'  
+
     }
 
     stages {
@@ -61,9 +64,20 @@ stage('Artifact Archiving') {
     }
 }
 
+stage('Create SonarQube Project') {
+    steps {
+        withCredentials([string(credentialsId: 'Sonar-Global-Token', variable: 'SONAR_TOKEN')]) {
+            sh """
+                curl -u ${SONAR_TOKEN}: -X POST "http://65.0.99.115:9000/api/projects/create?name=${SONAR_PROJECT_NAME}&project=${SONAR_PROJECT_KEY}"
+            """
+        }
+    }
+}
+
+
         stage('SonarQube Code Analysis') {
             steps {
-                withSonarQubeEnv('Sonar-Global-Token') {
+                withSonarQubeEnv('Sonar-Authentication') {
                     dir('WAR-Project') {
                         script {
                             echo "Starting SonarQube scan..."
@@ -73,7 +87,7 @@ stage('Artifact Archiving') {
                                 -Dsonar.projectName=${SONAR_PROJECT_NAME} \
                                 -Dsonar.sources=. \
                                 -Dsonar.java.binaries=target/classes \
-                                -Dsonar.host.url=http://13.232.172.2:9000
+                                -Dsonar.host.url=http://65.0.99.115:9000
                             """
                         }
                     }
@@ -171,40 +185,56 @@ stage('Artifact Archiving') {
             }
         }
 
-        stage('AWS EKS Update Kubeconfig') {
-            steps {
-                script {
-                    echo "Updating kubeconfig for EKS..."
-                    sh 'aws eks update-kubeconfig --region ap-south-1 --name Faisal || { echo "Failed to update kubeconfig!"; exit 1; }'
-                }
-            }
-        }
+stage('AWS EKS Update Kubeconfig') {
+    steps {
+        script {
+            def clusterMap = [
+                'qa'     : 'qa-eks-cluster',
+                'staging': 'staging-eks-cluster',
+                'prod'   : 'prod-eks-cluster'
+            ]
+            def selectedCluster = clusterMap[params.ENVIRONMENT]
 
-        stage('Deploy to QA/Staging with Helm') {
-            when {
-                expression { return params.ENVIRONMENT == 'qa' || params.ENVIRONMENT == 'staging' }
+            withAWS(credentials: 'aws-credentials', region: 'ap-south-1') {
+                echo "Updating kubeconfig for cluster: ${selectedCluster}"
+                sh """
+                    aws eks update-kubeconfig --region ap-south-1 --name ${selectedCluster} \
+                    || { echo "Failed to update kubeconfig for ${selectedCluster}"; exit 1; }
+                """
             }
-            steps {
-                script {
+        }
+    }
+}
+
+stage('Deploy to QA/Staging with Helm') {
+    when {
+        expression { return params.ENVIRONMENT == 'qa' || params.ENVIRONMENT == 'staging' }
+    }
+    steps {
+        script {
+            def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
+
+            withAWS(credentials: 'aws-credentials', region: 'ap-south-1') {
+                sh """
+                    kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
+                """
+                retry(3) {
+                    echo "Deploying to ${params.ENVIRONMENT} environment..."
                     sh """
-                        kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
+                        helm upgrade --install war-app-${params.ENVIRONMENT} ${HELM_CHART_DIR} \\
+                        --namespace ${params.ENVIRONMENT} \\
+                        --set ${chartValues} \\
+                        --set resources.requests.memory=128Mi \\
+                        --set resources.requests.cpu=100m \\
+                        --set resources.limits.memory=256Mi \\
+                        --set resources.limits.cpu=250m || { echo 'Helm deployment failed!'; exit 1; }
                     """
-                    def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
-                    retry(3) {
-                        echo "Deploying to ${params.ENVIRONMENT} environment..."
-                        sh """
-                            helm upgrade --install war-app-${params.ENVIRONMENT} ${HELM_CHART_DIR} \
-                            --namespace ${params.ENVIRONMENT} \
-                            --set ${chartValues} \
-                            --set resources.requests.memory=128Mi \
-                            --set resources.requests.cpu=100m \
-                            --set resources.limits.memory=256Mi \
-                            --set resources.limits.cpu=250m || { echo 'Helm deployment failed!'; exit 1; }
-                        """
-                    }
                 }
             }
         }
+    }
+}
+
 
 stage('Rollback (if needed)') {
     when {
@@ -230,35 +260,64 @@ stage('Rollback (if needed)') {
 
 
 // Monitoring Deployment for QA/Staging
-stage('Monitor Deployment (Pods + War-App Health Check)') {
+stage('Monitor Deployment for QA/Staging (Pods + War App Health Check)') {
     when {
         expression { return params.ENVIRONMENT != 'prod' } // Only for QA/Staging
     }
     steps {
         script {
-            echo "Monitoring deployment status..."
+            echo "🧪 Monitoring deployment status for ${params.ENVIRONMENT}..."
+
             retry(3) {
                 withEnv(["ENVIRONMENT=${params.ENVIRONMENT}"]) {
                     sh '''#!/bin/bash
-                        kubectl get pods -n "$ENVIRONMENT" || { echo 'Failed to get pods!'; exit 1; }
-                    '''
-                    sh '''#!/bin/bash
-                        POD_STATUS=$(kubectl get pods -n "$ENVIRONMENT" -o jsonpath='{.items[*].status.phase}')
-                        if [[ "$POD_STATUS" != *"Running"* ]]; then
-                            echo "❌ Not all pods are running."
+                    echo "⏳ Waiting for all pods to be in 'Running' status in namespace $ENVIRONMENT..."
+                    MAX_RETRIES=12
+                    RETRY_COUNT=0
+
+                    while true; do
+                        POD_PHASES=$(kubectl get pods -n "$ENVIRONMENT" -o jsonpath='{.items[*].status.phase}')
+                        NOT_RUNNING=$(echo "$POD_PHASES" | grep -v "Running" || true)
+
+                        if [ -z "$NOT_RUNNING" ]; then
+                            echo "✅ All pods are running in $ENVIRONMENT."
+                            break
+                        fi
+
+                        RETRY_COUNT=$((RETRY_COUNT+1))
+                        if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
+                            echo "❌ Timeout: Some pods are not in Running state."
+                            kubectl get pods -n "$ENVIRONMENT"
                             exit 1
                         fi
+
+                        echo "⏳ Pods not ready yet. Retrying in 5s... [$RETRY_COUNT/$MAX_RETRIES]"
+                        sleep 5
+                    done
                     '''
                 }
             }
+
             retry(3) {
-                withEnv(["WAR_APP_URL=${WAR_APP_URL}"]) {
+                withEnv(["WAR_APP_URL=$WAR_APP_URL"]) {
                     sh '''#!/bin/bash
-                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
-                        if [ "$STATUS_CODE" -ne 200 ]; then
-                            echo "❌ War-App health check failed."
-                            exit 1
-                        fi
+                    echo "🌐 Performing War App health check on $WAR_APP_URL ..."
+                    sleep 10  # wait for service to be ready
+                    echo "🔍 DNS resolution test:"
+                    nslookup "$WAR_APP_URL" || echo "❗ DNS resolution failed."
+
+                    echo "🔍 CURL with verbose output:"
+                    curl -v "$WAR_APP_URL" || echo "❗ CURL failed."
+
+                    STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
+                    echo "ℹ️ HTTP Status Code: $STATUS_CODE"
+
+                    if [ "$STATUS_CODE" -ne 200 ]; then
+                        echo "❌ War App health check failed with status code $STATUS_CODE"
+                        exit 1
+                    fi
+
+                    echo "✅ App is healthy. HTTP $STATUS_CODE"
                     '''
                 }
             }
@@ -266,77 +325,110 @@ stage('Monitor Deployment (Pods + War-App Health Check)') {
     }
 }
 
-        stage('Approval for Production') {
-            when {
-                expression { return params.ENVIRONMENT == 'prod' }
-            }
-            steps {
-                input message: "Deploy to Production?", ok: "Yes, deploy now"
-            }
-        }
+stage('Approval for Production') {
+    when {
+        expression { return params.ENVIRONMENT == 'prod' }
+    }
+    steps {
+        input message: "Deploy to Production?", ok: "Yes, deploy now"
+    }
+}
 
-        stage('Deploy to Production with Helm') {
-            when {
-                expression { return params.ENVIRONMENT == 'prod' }
-            }
-            steps {
-                script {
+stage('Deploy to Production with Helm') {
+    when {
+        expression { return params.ENVIRONMENT == 'prod' }
+    }
+    steps {
+        script {
+            def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
+
+            withAWS(credentials: 'aws-credentials', region: 'ap-south-1') {
+                sh """
+                    kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
+                """
+                retry(3) {
+                    echo "Deploying to ${params.ENVIRONMENT} environment..."
                     sh """
-                        kubectl get namespace prod || kubectl create namespace prod
+                        helm upgrade --install war-app-${params.ENVIRONMENT} ${HELM_CHART_DIR} \\
+                        --namespace ${params.ENVIRONMENT} \\
+                        --set ${chartValues} \\
+                        --set resources.requests.memory=128Mi \\
+                        --set resources.requests.cpu=100m \\
+                        --set resources.limits.memory=256Mi \\
+                        --set resources.limits.cpu=250m
                     """
-                    def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=prod"
-                    retry(3) {
-                        echo "Deploying to Production..."
-                        sh """
-                            helm upgrade --install war-app-prod ${HELM_CHART_DIR} \
-                            --namespace prod \
-                            --set ${chartValues} \
-                            --set resources.requests.memory=128Mi \
-                            --set resources.requests.cpu=100m \
-                            --set resources.limits.memory=256Mi \
-                            --set resources.limits.cpu=250m || { echo 'Production deployment failed!'; exit 1; }
-                        """
-                    }
                 }
             }
         }
+    }
+}
 
-// Monitoring for Production Deployment
+// Monitoring Deployment for Production
 stage('Monitor Deployment for Production (Pods + War-App Health Check)') {
     when {
         expression { return params.ENVIRONMENT == 'prod' }
     }
     steps {
         script {
-            echo "Monitoring production deployment status..."
+            echo "📡 Monitoring production deployment status for ${params.ENVIRONMENT}..."
+
             retry(3) {
                 withEnv(["ENVIRONMENT=${params.ENVIRONMENT}"]) {
                     sh '''#!/bin/bash
-                        kubectl get pods -n "$ENVIRONMENT" || { echo 'Failed to get pods!'; exit 1; }
-                    '''
-                    sh '''#!/bin/bash
-                        POD_STATUS=$(kubectl get pods -n "$ENVIRONMENT" -o jsonpath='{.items[*].status.phase}')
-                        if [[ "$POD_STATUS" != *"Running"* ]]; then
-                            echo "❌ Not all pods are running."
+                    echo "⏳ Waiting for all pods to be in 'Running' status in namespace $ENVIRONMENT..."
+                    MAX_RETRIES=12
+                    RETRY_COUNT=0
+
+                    while true; do
+                        POD_PHASES=$(kubectl get pods -n "$ENVIRONMENT" -o jsonpath='{.items[*].status.phase}')
+                        NOT_RUNNING=$(echo "$POD_PHASES" | grep -v "Running" || true)
+
+                        if [ -z "$NOT_RUNNING" ]; then
+                            echo "✅ All pods are running in $ENVIRONMENT."
+                            break
+                        fi
+
+                        RETRY_COUNT=$((RETRY_COUNT+1))
+                        if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
+                            echo "❌ Timeout: Some pods are not in Running state."
+                            kubectl get pods -n "$ENVIRONMENT"
                             exit 1
                         fi
+
+                        echo "⏳ Pods not ready yet. Retrying in 5s... [$RETRY_COUNT/$MAX_RETRIES]"
+                        sleep 5
+                    done
                     '''
                 }
             }
+
             retry(3) {
-                withEnv(["WAR_APP_URL=${WAR_APP_URL}"]) {
+                withEnv(["WAR_APP_URL=$WAR_APP_URL"]) {
                     sh '''#!/bin/bash
-                        STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
-                        if [ "$STATUS_CODE" -ne 200 ]; then
-                            echo "❌ War-App health check failed."
-                            exit 1
-                        fi
+                    echo "🌐 Performing War App health check on $WAR_APP_URL ..."
+                    sleep 10  # wait for service to be ready
+                    echo "🔍 DNS resolution test:"
+                    nslookup "$WAR_APP_URL" || echo "❗ DNS resolution failed."
+
+                    echo "🔍 CURL with verbose output:"
+                    curl -v "$WAR_APP_URL" || echo "❗ CURL failed."
+
+                    STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WAR_APP_URL")
+                    echo "ℹ️ HTTP Status Code: $STATUS_CODE"
+
+                    if [ "$STATUS_CODE" -ne 200 ]; then
+                        echo "❌ War App health check failed with status code $STATUS_CODE"
+                        exit 1
+                    fi
+
+                    echo "✅ App is healthy. HTTP $STATUS_CODE"
                     '''
                 }
             }
         }
     }
 }
+
 
         stage('Docker Image Cleanup') {
             steps {
