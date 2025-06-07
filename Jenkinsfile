@@ -224,10 +224,10 @@ stage('Deploy to QA/Staging with Helm') {
                         helm upgrade --install war-app-${params.ENVIRONMENT} ${HELM_CHART_DIR} \\
                         --namespace ${params.ENVIRONMENT} \\
                         --set ${chartValues} \\
-                        --set resources.requests.memory=128Mi \\
-                        --set resources.requests.cpu=100m \\
-                        --set resources.limits.memory=256Mi \\
-                        --set resources.limits.cpu=250m || { echo 'Helm deployment failed!'; exit 1; }
+                        --set resources.requests.memory=256Mi \\
+                        --set resources.requests.cpu=200m \\
+                        --set resources.limits.memory=512Mi \\
+                        --set resources.limits.cpu=500m || { echo 'Helm deployment failed!'; exit 1; }
                     """
                 }
             }
@@ -352,10 +352,10 @@ stage('Deploy to Production with Helm') {
                         helm upgrade --install war-app-${params.ENVIRONMENT} ${HELM_CHART_DIR} \\
                         --namespace ${params.ENVIRONMENT} \\
                         --set ${chartValues} \\
-                        --set resources.requests.memory=128Mi \\
-                        --set resources.requests.cpu=100m \\
-                        --set resources.limits.memory=256Mi \\
-                        --set resources.limits.cpu=250m
+                        --set resources.requests.memory=512Mi \\
+                        --set resources.requests.cpu=300m \\
+                        --set resources.limits.memory=1024Mi \\
+                        --set resources.limits.cpu=1000m
                     """
                 }
             }
