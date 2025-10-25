@@ -195,10 +195,10 @@ stage('AWS EKS Update Kubeconfig') {
             ]
             def selectedCluster = clusterMap[params.ENVIRONMENT]
 
-            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-1') {
+            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-2') {
                 echo "Updating kubeconfig for cluster: ${selectedCluster}"
                 sh """
-                    aws eks update-kubeconfig --region ap-southeast-1 --name ${selectedCluster} \
+                    aws eks update-kubeconfig --region ap-southeast-2 --name ${selectedCluster} \
                     || { echo "Failed to update kubeconfig for ${selectedCluster}"; exit 1; }
                 """
             }
@@ -214,7 +214,7 @@ stage('Deploy to QA/Staging with Helm') {
         script {
             def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
 
-            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-1') {
+            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-2') {
                 sh """
                     kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
                 """
@@ -342,7 +342,7 @@ stage('Deploy to Production with Helm') {
         script {
             def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
 
-            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-1') {
+            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-2') {
                 sh """
                     kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
                 """
