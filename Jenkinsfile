@@ -214,7 +214,7 @@ stage('Deploy to QA/Staging with Helm') {
         script {
             def chartValues = "image.repository=${DOCKER_IMAGE},image.tag=${BUILD_NUMBER},environment=${params.ENVIRONMENT}"
 
-            withAWS(credentials: 'aws-credentials', region: 'ap-south-1') {
+            withAWS(credentials: 'aws-credentials', region: 'ap-southeast-2') {
                 sh """
                     kubectl get namespace ${params.ENVIRONMENT} || kubectl create namespace ${params.ENVIRONMENT}
                 """
