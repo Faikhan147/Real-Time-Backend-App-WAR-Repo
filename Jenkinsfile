@@ -68,7 +68,7 @@ stage('Create SonarQube Project') {
     steps {
         withCredentials([string(credentialsId: 'Sonar-Global-Token', variable: 'SONAR_TOKEN')]) {
             sh """
-                curl -u ${SONAR_TOKEN}: -X POST "http://16.176.33.204:9000/api/projects/create?name=${SONAR_PROJECT_NAME}&project=${SONAR_PROJECT_KEY}"
+                curl -u ${SONAR_TOKEN}: -X POST "http://3.106.57.208:9000/api/projects/create?name=${SONAR_PROJECT_NAME}&project=${SONAR_PROJECT_KEY}"
             """
         }
     }
@@ -87,7 +87,7 @@ stage('Create SonarQube Project') {
                                 -Dsonar.projectName=${SONAR_PROJECT_NAME} \
                                 -Dsonar.sources=. \
                                 -Dsonar.java.binaries=target/classes \
-                                -Dsonar.host.url=http://16.176.33.204:9000
+                                -Dsonar.host.url=http://3.106.57.208:9000
                             """
                         }
                     }
