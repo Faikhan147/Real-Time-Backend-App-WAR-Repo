@@ -120,7 +120,7 @@ stage('Create SonarQube Project') {
             }
         }
 
-        stage('Trivy Scan - Critical and High') {
+        stage('Trivy Scan - Critical') {
             steps {
                 echo "Starting Trivy scan for vulnerabilities..."
                 sh """
